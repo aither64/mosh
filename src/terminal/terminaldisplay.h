@@ -74,6 +74,8 @@ private:
 
   bool has_title; /* supports window title and icon name */
 
+  int colors; /* terminfo colors capability */
+
   const char *smcup, *rmcup; /* enter and exit alternate screen mode */
 
   bool put_row( bool initialized,
@@ -90,6 +92,7 @@ public:
   std::string close() const;
 
   std::string new_frame( bool initialized, const Framebuffer& last, const Framebuffer& f ) const;
+  int color_count( void ) const { return colors; }
 
   Display( bool use_environment );
 };

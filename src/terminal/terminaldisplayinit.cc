@@ -81,7 +81,7 @@ static const char* ti_str( const char* capname )
 }
 
 Display::Display( bool use_environment )
-  : has_ech( true ), has_bce( true ), has_title( true ), smcup( NULL ), rmcup( NULL )
+  : has_ech( true ), has_bce( true ), has_title( true ), colors( 0 ), smcup( NULL ), rmcup( NULL )
 {
   if ( use_environment ) {
     int errret = -2;
@@ -109,6 +109,11 @@ Display::Display( bool use_environment )
 
     /* check for BCE */
     has_bce = ti_flag( "bce" );
+
+    colors = tigetnum( const_cast<char*>( "colors" ) );
+    if ( colors < 0 ) {
+      colors = 0;
+    }
 
     /* Check if we can set the window title and icon name.  terminfo does not
        have reliable information on this, so we hardcode a whitelist of

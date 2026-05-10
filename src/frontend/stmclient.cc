@@ -39,8 +39,10 @@
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
+#include <map>
 
 #include <err.h>
+#include <poll.h>
 #include <pwd.h>
 #include <sys/ioctl.h>
 #include <sys/types.h>
@@ -63,6 +65,210 @@
 #include "stmclient.h"
 
 #include "src/network/networktransport-impl.h"
+
+struct ColorProbeResult
+{
+  std::string foreground;
+  std::string background;
+  Parser::TerminalColors::IndexedColors indexed_colors;
+  std::string leftover_bytes;
+};
+
+static const size_t MAX_COLOR_PAYLOAD = 256;
+static const int MAX_INDEXED_COLORS = 256;
+static const int COLOR_PROBE_TIMEOUT_MS = 100;
+
+static bool sanitize_color_payload( const std::string& payload )
+{
+  if ( payload.empty() || payload.size() > MAX_COLOR_PAYLOAD || payload == "?" ) {
+    return false;
+  }
+
+  for ( const char ch : payload ) {
+    const unsigned char c = ch;
+    if ( c < 0x20 || c == 0x7f || c == ';' ) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+static void append_osc_query( std::string& query, int ps )
+{
+  char tmp[32];
+  snprintf( tmp, sizeof( tmp ), "\033]%d;?\033\\", ps );
+  query.append( tmp );
+}
+
+static void append_osc4_query( std::string& query, int index )
+{
+  char tmp[32];
+  snprintf( tmp, sizeof( tmp ), "\033]4;%d;?\033\\", index );
+  query.append( tmp );
+}
+
+static bool parse_number( const std::string& input, size_t& pos, long& number )
+{
+  bool has_digits = false;
+  number = 0;
+
+  while ( pos < input.size() && input[pos] >= '0' && input[pos] <= '9' ) {
+    has_digits = true;
+    number = number * 10 + ( input[pos] - '0' );
+    if ( number > 65535 ) {
+      return false;
+    }
+    pos++;
+  }
+
+  return has_digits;
+}
+
+static bool parse_osc_terminator( const std::string& input, size_t& pos )
+{
+  while ( pos < input.size() ) {
+    if ( input[pos] == '\007' ) {
+      pos++;
+      return true;
+    }
+    if ( input[pos] == '\033' && pos + 1 < input.size() && input[pos + 1] == '\\' ) {
+      pos += 2;
+      return true;
+    }
+    pos++;
+  }
+
+  return false;
+}
+
+static std::string extract_payload( const std::string& input, size_t payload_start, size_t payload_end )
+{
+  if ( payload_end > payload_start && input[payload_end - 1] == '\007' ) {
+    payload_end--;
+  } else if ( payload_end >= payload_start + 2 && input[payload_end - 2] == '\033'
+              && input[payload_end - 1] == '\\' ) {
+    payload_end -= 2;
+  }
+
+  return input.substr( payload_start, payload_end - payload_start );
+}
+
+static ColorProbeResult parse_color_probe_buffer( const std::string& buf )
+{
+  ColorProbeResult result;
+  std::map<int, std::string> indexed_colors;
+  size_t pos = 0;
+
+  while ( pos < buf.size() ) {
+    if ( buf[pos] != '\033' || pos + 1 >= buf.size() || buf[pos + 1] != ']' ) {
+      result.leftover_bytes.push_back( buf[pos] );
+      pos++;
+      continue;
+    }
+
+    const size_t start = pos;
+    pos += 2;
+
+    long ps = 0;
+    if ( !parse_number( buf, pos, ps ) || pos >= buf.size() || buf[pos] != ';' ) {
+      result.leftover_bytes.push_back( buf[start] );
+      pos = start + 1;
+      continue;
+    }
+    pos++;
+
+    long index = -1;
+    bool valid_indexed_reply = false;
+    if ( ps == 4 ) {
+      valid_indexed_reply = parse_number( buf, pos, index ) && pos < buf.size() && buf[pos] == ';';
+      if ( valid_indexed_reply ) {
+        pos++;
+      }
+    }
+
+    const size_t payload_start = pos;
+    if ( !parse_osc_terminator( buf, pos ) ) {
+      result.leftover_bytes.append( buf, start, pos - start );
+      continue;
+    }
+
+    const std::string payload = extract_payload( buf, payload_start, pos );
+    if ( ( ps == 10 || ps == 11 ) && sanitize_color_payload( payload ) ) {
+      if ( ps == 10 ) {
+        result.foreground = payload;
+      } else {
+        result.background = payload;
+      }
+    } else if ( ps == 4 && valid_indexed_reply && index >= 0 && index < MAX_INDEXED_COLORS
+                && sanitize_color_payload( payload ) ) {
+      indexed_colors[static_cast<int>( index )] = payload;
+    } else {
+      result.leftover_bytes.append( buf, start, pos - start );
+    }
+  }
+
+  for ( const auto& indexed_color : indexed_colors ) {
+    result.indexed_colors.push_back( Parser::TerminalColors::IndexedColor { indexed_color.first, indexed_color.second } );
+  }
+
+  return result;
+}
+
+static ColorProbeResult probe_terminal_colors( int color_count )
+{
+  if ( color_count < 0 ) {
+    color_count = 0;
+  } else if ( color_count > MAX_INDEXED_COLORS ) {
+    color_count = MAX_INDEXED_COLORS;
+  }
+
+  std::string query;
+  append_osc_query( query, 10 );
+  append_osc_query( query, 11 );
+  for ( int i = 0; i < color_count; i++ ) {
+    append_osc4_query( query, i );
+  }
+  swrite( STDOUT_FILENO, query.data(), query.size() );
+
+  std::string buf;
+  freeze_timestamp();
+  const uint64_t deadline = frozen_timestamp() + COLOR_PROBE_TIMEOUT_MS;
+
+  while ( true ) {
+    freeze_timestamp();
+    const uint64_t now = frozen_timestamp();
+    if ( now >= deadline ) {
+      break;
+    }
+    const int remaining = static_cast<int>( deadline - now );
+
+    struct pollfd pfd;
+    pfd.fd = STDIN_FILENO;
+    pfd.events = POLLIN;
+    pfd.revents = 0;
+
+    const int ret = poll( &pfd, 1, remaining );
+    if ( ret <= 0 ) {
+      break;
+    }
+
+    char tmp[512];
+    const ssize_t n = read( STDIN_FILENO, tmp, sizeof( tmp ) );
+    if ( n <= 0 ) {
+      break;
+    }
+    buf.append( tmp, n );
+
+    const ColorProbeResult parsed = parse_color_probe_buffer( buf );
+    if ( !parsed.foreground.empty() && !parsed.background.empty()
+         && static_cast<int>( parsed.indexed_colors.size() ) >= color_count ) {
+      break;
+    }
+  }
+
+  return parse_color_probe_buffer( buf );
+}
 
 void STMClient::resume( void )
 {
@@ -257,6 +463,8 @@ void STMClient::main_init( void )
   std::string init = display.new_frame( false, local_framebuffer, local_framebuffer );
   swrite( STDOUT_FILENO, init.data(), init.size() );
 
+  ColorProbeResult colors = probe_terminal_colors( display.color_count() );
+
   /* open network */
   Network::UserStream blank;
   Terminal::Complete local_terminal( window_size.ws_col, window_size.ws_row );
@@ -266,6 +474,15 @@ void STMClient::main_init( void )
 
   /* tell server the size of the terminal */
   network->get_current_state().push_back( Parser::Resize( window_size.ws_col, window_size.ws_row ) );
+
+  if ( !colors.foreground.empty() || !colors.background.empty() || !colors.indexed_colors.empty() ) {
+    network->get_current_state().push_back(
+      Parser::TerminalColors( colors.foreground, colors.background, colors.indexed_colors ) );
+  }
+
+  for ( const char c : colors.leftover_bytes ) {
+    network->get_current_state().push_back( Parser::UserByte( c ) );
+  }
 
   /* be noisy as necessary */
   network->set_verbose( verbose );
