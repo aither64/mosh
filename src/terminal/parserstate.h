@@ -51,7 +51,7 @@ public:
   void setfamily( StateFamily* s_family ) { family = s_family; }
   Transition input( wchar_t ch ) const;
   virtual ActionPointer enter( void ) const { return std::make_shared<Ignore>(); }
-  virtual ActionPointer exit( void ) const { return std::make_shared<Ignore>(); }
+  virtual ActionPointer exit( wchar_t ch __attribute( ( unused ) ) ) const { return std::make_shared<Ignore>(); }
 
   State() : family( NULL ) {};
   virtual ~State() {};
@@ -111,7 +111,7 @@ class DCS_Passthrough : public State
 {
   ActionPointer enter( void ) const;
   Transition input_state_rule( wchar_t ch ) const;
-  ActionPointer exit( void ) const;
+  ActionPointer exit( wchar_t ch ) const;
 };
 class DCS_Ignore : public State
 {
@@ -122,7 +122,7 @@ class OSC_String : public State
 {
   ActionPointer enter( void ) const;
   Transition input_state_rule( wchar_t ch ) const;
-  ActionPointer exit( void ) const;
+  ActionPointer exit( wchar_t ch ) const;
 };
 class SOS_PM_APC_String : public State
 {

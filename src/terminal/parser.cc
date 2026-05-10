@@ -54,7 +54,7 @@ void Parser::Parser::input( wchar_t ch, Actions& ret )
   Transition tx = state->input( ch );
 
   if ( tx.next_state != NULL ) {
-    append_or_delete( state->exit(), ret );
+    append_or_delete( state->exit( ch ), ret );
   }
 
   append_or_delete( tx.action, ret );
