@@ -170,6 +170,42 @@ public:
 
   bool operator==( const Resize& other ) const { return ( width == other.width ) && ( height == other.height ); }
 };
+
+class TerminalColors : public Action
+{
+public:
+  struct IndexedColor
+  {
+    int index;
+    std::string color;
+
+    bool operator==( const IndexedColor& other ) const
+    {
+      return ( index == other.index ) && ( color == other.color );
+    }
+  };
+
+  using IndexedColors = std::vector<IndexedColor>;
+
+  std::string foreground;
+  std::string background;
+  IndexedColors indexed_colors;
+
+  std::string name( void ) { return std::string( "TerminalColors" ); }
+  void act_on_terminal( Terminal::Emulator* emu ) const;
+
+  TerminalColors( const std::string& s_foreground,
+                  const std::string& s_background,
+                  const IndexedColors& s_indexed_colors = IndexedColors() )
+    : foreground( s_foreground ), background( s_background ), indexed_colors( s_indexed_colors )
+  {}
+
+  bool operator==( const TerminalColors& other ) const
+  {
+    return ( foreground == other.foreground ) && ( background == other.background )
+           && ( indexed_colors == other.indexed_colors );
+  }
+};
 }
 
 #endif

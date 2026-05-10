@@ -36,6 +36,7 @@
 #include <cstdio>
 #include <cwchar>
 #include <deque>
+#include <map>
 #include <vector>
 
 #include "src/terminal/parseraction.h"
@@ -60,11 +61,15 @@ class Emulator
 
   friend void Parser::UserByte::act_on_terminal( Emulator* ) const;
   friend void Parser::Resize::act_on_terminal( Emulator* ) const;
+  friend void Parser::TerminalColors::act_on_terminal( Emulator* ) const;
 
 private:
   Framebuffer fb;
   Dispatcher dispatch;
   UserInput user;
+  std::string cached_foreground_color;
+  std::string cached_background_color;
+  std::map<int, std::string> cached_indexed_colors;
 
   /* action methods */
   void print( const Parser::Print* act );
@@ -73,6 +78,9 @@ private:
   void Esc_dispatch( const Parser::Esc_Dispatch* act );
   void OSC_end( const Parser::OSC_End* act );
   void resize( size_t s_width, size_t s_height );
+  void set_terminal_colors( const std::string& foreground,
+                            const std::string& background,
+                            const Parser::TerminalColors::IndexedColors& indexed_colors );
 
 public:
   Emulator( size_t s_width, size_t s_height );

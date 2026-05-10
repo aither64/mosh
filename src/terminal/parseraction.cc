@@ -97,3 +97,8 @@ void Resize::act_on_terminal( Terminal::Emulator* emu ) const
 {
   emu->resize( width, height );
 }
+
+void TerminalColors::act_on_terminal( Terminal::Emulator* emu ) const
+{
+  emu->set_terminal_colors( foreground, background, indexed_colors );
+}

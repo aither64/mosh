@@ -89,6 +89,18 @@ std::string UserStream::diff_from( const UserStream& existing ) const
         new_inst->MutableExtension( resize )->set_width( my_it->resize.width );
         new_inst->MutableExtension( resize )->set_height( my_it->resize.height );
       } break;
+      case TerminalColorsType: {
+        Instruction* new_inst = output.add_instruction();
+        TerminalColorsMessage* message = new_inst->MutableExtension( terminal_colors );
+        message->set_foreground( my_it->terminal_colors.foreground );
+        message->set_background( my_it->terminal_colors.background );
+
+        for ( const auto& indexed_color : my_it->terminal_colors.indexed_colors ) {
+          IndexedColorMessage* entry = message->add_indexed_colors();
+          entry->set_index( indexed_color.index );
+          entry->set_color( indexed_color.color );
+        }
+      } break;
       default:
         assert( !"unexpected event type" );
         break;
@@ -114,6 +126,16 @@ void UserStream::apply_string( const std::string& diff )
     } else if ( input.instruction( i ).HasExtension( resize ) ) {
       actions.push_back( UserEvent( Resize( input.instruction( i ).GetExtension( resize ).width(),
                                             input.instruction( i ).GetExtension( resize ).height() ) ) );
+    } else if ( input.instruction( i ).HasExtension( terminal_colors ) ) {
+      const TerminalColorsMessage& message = input.instruction( i ).GetExtension( terminal_colors );
+      TerminalColors::IndexedColors indexed_colors;
+
+      for ( int color_i = 0; color_i < message.indexed_colors_size(); color_i++ ) {
+        const IndexedColorMessage& entry = message.indexed_colors( color_i );
+        indexed_colors.push_back( TerminalColors::IndexedColor { entry.index(), entry.color() } );
+      }
+
+      actions.push_back( UserEvent( TerminalColors( message.foreground(), message.background(), indexed_colors ) ) );
     }
   }
 }
@@ -125,6 +147,8 @@ const Parser::Action& UserStream::get_action( unsigned int i ) const
       return actions[i].userbyte;
     case ResizeType:
       return actions[i].resize;
+    case TerminalColorsType:
+      return actions[i].terminal_colors;
     default:
       assert( !"unexpected action type" );
       static const Parser::Ignore nothing = Parser::Ignore();

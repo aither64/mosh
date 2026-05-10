@@ -21,7 +21,19 @@ message ResizeMessage {
   optional int32 height = 6;
 }
 
+message IndexedColorMessage {
+  optional int32 index = 1;
+  optional bytes color = 2;
+}
+
+message TerminalColorsMessage {
+  optional bytes foreground = 1;
+  optional bytes background = 2;
+  repeated IndexedColorMessage indexed_colors = 3;
+}
+
 extend Instruction {
   optional Keystroke keystroke = 2;
   optional ResizeMessage resize = 3;
+  optional TerminalColorsMessage terminal_colors = 4;
 }
