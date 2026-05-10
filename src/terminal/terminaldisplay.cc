@@ -45,6 +45,43 @@ static const Renditions& initial_rendition( void )
   return blank;
 }
 
+static void append_palette_set( FrameState& frame, int index, const std::string& color )
+{
+  char tmp[32];
+  snprintf( tmp, sizeof( tmp ), "\033]4;%d;", index );
+  frame.append( tmp );
+  frame.append_string( color );
+  frame.append( '\007' );
+}
+
+static void append_palette_reset( FrameState& frame, int index )
+{
+  char tmp[32];
+  snprintf( tmp, sizeof( tmp ), "\033]104;%d\007", index );
+  frame.append( tmp );
+}
+
+static void append_palette_updates( FrameState& frame, bool initialized, const Framebuffer& f )
+{
+  const Framebuffer::palette_type& old_palette = frame.last_frame.get_palette();
+  const Framebuffer::palette_type& new_palette = f.get_palette();
+
+  if ( initialized ) {
+    for ( const auto& old_color : old_palette ) {
+      if ( new_palette.find( old_color.first ) == new_palette.end() ) {
+        append_palette_reset( frame, old_color.first );
+      }
+    }
+  }
+
+  for ( const auto& new_color : new_palette ) {
+    Framebuffer::palette_type::const_iterator old_color = old_palette.find( new_color.first );
+    if ( !initialized || old_color == old_palette.end() || old_color->second != new_color.second ) {
+      append_palette_set( frame, new_color.first, new_color.second );
+    }
+  }
+}
+
 std::string Display::open() const
 {
   return std::string( smcup ? smcup : "" ) + std::string( "\033[?1h" );
@@ -61,6 +98,7 @@ std::string Display::close() const
 std::string Display::new_frame( bool initialized, const Framebuffer& last, const Framebuffer& f ) const
 {
   FrameState frame( last );
+  const bool palette_initialized = initialized;
 
   char tmp[64];
 
@@ -137,6 +175,8 @@ std::string Display::new_frame( bool initialized, const Framebuffer& last, const
     frame.current_rendition = frame.last_frame.ds.get_renditions();
     frame.current_hyperlink = frame.last_frame.ds.get_hyperlink();
   }
+
+  append_palette_updates( frame, palette_initialized, f );
 
   /* is cursor visibility initialized? */
   if ( !initialized ) {

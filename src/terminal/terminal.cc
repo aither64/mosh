@@ -154,7 +154,7 @@ void Emulator::CSI_dispatch( const Parser::CSI_Dispatch* act )
 
 void Emulator::OSC_end( const Parser::OSC_End* act )
 {
-  dispatch.OSC_dispatch( act, &fb, cached_foreground_color, cached_background_color );
+  dispatch.OSC_dispatch( act, &fb, cached_foreground_color, cached_background_color, cached_indexed_colors );
 }
 
 void Emulator::Esc_dispatch( const Parser::Esc_Dispatch* act )

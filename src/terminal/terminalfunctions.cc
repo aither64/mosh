@@ -31,6 +31,7 @@
 */
 
 #include <algorithm>
+#include <map>
 #include <cstdio>
 #include <string>
 #include <utility>
@@ -671,11 +672,136 @@ static void append_osc_color_reply( std::string& output, long cmd_num, const std
   output.append( bel_terminated ? "\007" : "\033\\" );
 }
 
+static bool Convert_OSC_Color_Payload( const std::vector<wchar_t>& OSC_string,
+                                       size_t start,
+                                       size_t end,
+                                       std::string& output )
+{
+  static const size_t MAX_COLOR_PAYLOAD = 256;
+
+  if ( end <= start || end - start > MAX_COLOR_PAYLOAD ) {
+    return false;
+  }
+
+  output.clear();
+  for ( size_t i = start; i < end; i++ ) {
+    const wchar_t wide_char = OSC_string[i];
+    if ( wide_char < 0x20 || wide_char > 0x7e || wide_char == L';' ) {
+      return false;
+    }
+    output.push_back( static_cast<char>( wide_char ) );
+  }
+
+  return output != "?";
+}
+
+static bool Parse_OSC_Index( const std::vector<wchar_t>& OSC_string, size_t& offset, int& index )
+{
+  if ( offset >= OSC_string.size() || OSC_string[offset] < L'0' || OSC_string[offset] > L'9' ) {
+    return false;
+  }
+
+  long parsed = 0;
+  while ( offset < OSC_string.size() && OSC_string[offset] >= L'0' && OSC_string[offset] <= L'9' ) {
+    parsed = parsed * 10 + ( OSC_string[offset] - L'0' );
+    if ( parsed > 255 ) {
+      return false;
+    }
+    offset++;
+  }
+
+  index = static_cast<int>( parsed );
+  return true;
+}
+
+static void append_osc4_color_reply( std::string& output,
+                                     int index,
+                                     const std::string& color,
+                                     bool bel_terminated )
+{
+  char ps_str[16];
+  snprintf( ps_str, sizeof( ps_str ), "%d", index );
+  output.append( "\033]4;" );
+  output.append( ps_str );
+  output.push_back( ';' );
+  output.append( color );
+  output.append( bel_terminated ? "\007" : "\033\\" );
+}
+
+static void OSC_4( const std::vector<wchar_t>& OSC_string,
+                   size_t offset,
+                   Framebuffer* fb,
+                   std::string& terminal_to_host,
+                   const std::map<int, std::string>& cached_indexed_colors,
+                   bool bel_terminated )
+{
+  while ( offset < OSC_string.size() ) {
+    int index = 0;
+    if ( !Parse_OSC_Index( OSC_string, offset, index ) || offset >= OSC_string.size()
+         || OSC_string[offset] != L';' ) {
+      return;
+    }
+    offset++;
+
+    const size_t payload_start = offset;
+    while ( offset < OSC_string.size() && OSC_string[offset] != L';' ) {
+      offset++;
+    }
+    const size_t payload_end = offset;
+
+    if ( payload_start + 1 == payload_end && OSC_string[payload_start] == L'?' ) {
+      std::string color;
+      if ( fb->get_palette_color( index, color ) ) {
+        append_osc4_color_reply( terminal_to_host, index, color, bel_terminated );
+      } else {
+        std::map<int, std::string>::const_iterator cached = cached_indexed_colors.find( index );
+        if ( cached != cached_indexed_colors.end() ) {
+          append_osc4_color_reply( terminal_to_host, index, cached->second, bel_terminated );
+        }
+      }
+    } else {
+      std::string color;
+      if ( Convert_OSC_Color_Payload( OSC_string, payload_start, payload_end, color ) ) {
+        fb->set_palette_color( index, color );
+      }
+    }
+
+    if ( offset < OSC_string.size() ) {
+      offset++;
+    }
+  }
+}
+
+static void OSC_104( const std::vector<wchar_t>& OSC_string, size_t offset, Framebuffer* fb )
+{
+  if ( offset >= OSC_string.size() ) {
+    fb->reset_palette_colors();
+    return;
+  }
+
+  while ( offset < OSC_string.size() ) {
+    int index = 0;
+    if ( !Parse_OSC_Index( OSC_string, offset, index ) ) {
+      return;
+    }
+    fb->reset_palette_color( index );
+
+    if ( offset >= OSC_string.size() ) {
+      return;
+    }
+    if ( OSC_string[offset] != L';' ) {
+      return;
+    }
+    offset++;
+  }
+}
+
 /* xterm uses an Operating System Command to set the window title */
 void Dispatcher::OSC_dispatch( const Parser::OSC_End* act,
                                Framebuffer* fb,
                                const std::string& cached_foreground,
-                               const std::string& cached_background )
+                               const std::string& cached_background,
+                               const std::map<int, std::string>& cached_indexed_colors )
 {
   const bool bel_terminated = ( act->char_present && act->ch == 0x07 );
 
@@ -709,6 +835,16 @@ void Dispatcher::OSC_dispatch( const Parser::OSC_End* act,
         append_osc_color_reply( terminal_to_host, cmd_num, color, bel_terminated );
       }
     }
+    return;
+  }
+
+  if ( cmd_num == 4 ) {
+    OSC_4( OSC_string, offset, fb, terminal_to_host, cached_indexed_colors, bel_terminated );
+    return;
+  }
+
+  if ( cmd_num == 104 ) {
+    OSC_104( OSC_string, offset, fb );
     return;
   }
 

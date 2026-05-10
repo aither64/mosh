@@ -38,6 +38,7 @@
 #include <cstdint>
 #include <deque>
 #include <list>
+#include <map>
 #include <memory>
 #include <string>
 #include <utility>
@@ -409,6 +410,7 @@ class Framebuffer
   // * If no row is shared, the frame has not been modified.
 public:
   typedef std::vector<wchar_t> title_type;
+  typedef std::map<int, std::string> palette_type;
   typedef std::shared_ptr<Row> row_pointer;
   typedef std::vector<row_pointer> rows_type; /* can be either std::vector or std::deque */
 
@@ -417,6 +419,7 @@ private:
   title_type icon_name;
   title_type window_title;
   title_type clipboard;
+  palette_type palette;
   unsigned int bell_count;
   bool title_initialized; /* true if the window title has been set via an OSC */
 
@@ -498,9 +501,22 @@ public:
   void set_icon_name( const title_type& s ) { icon_name = s; }
   void set_window_title( const title_type& s ) { window_title = s; }
   void set_clipboard( const title_type& s ) { clipboard = s; }
+  void set_palette_color( int index, const std::string& color ) { palette[index] = color; }
+  void reset_palette_color( int index ) { palette.erase( index ); }
+  void reset_palette_colors( void ) { palette.clear(); }
   const title_type& get_icon_name( void ) const { return icon_name; }
   const title_type& get_window_title( void ) const { return window_title; }
   const title_type& get_clipboard( void ) const { return clipboard; }
+  const palette_type& get_palette( void ) const { return palette; }
+  bool get_palette_color( int index, std::string& color ) const
+  {
+    palette_type::const_iterator i = palette.find( index );
+    if ( i == palette.end() ) {
+      return false;
+    }
+    color = i->second;
+    return true;
+  }
 
   void prefix_window_title( const title_type& s );
 
@@ -515,7 +531,7 @@ public:
   bool operator==( const Framebuffer& x ) const
   {
     return ( rows == x.rows ) && ( window_title == x.window_title ) && ( clipboard == x.clipboard )
-           && ( bell_count == x.bell_count ) && ( ds == x.ds );
+           && ( palette == x.palette ) && ( bell_count == x.bell_count ) && ( ds == x.ds );
   }
 };
 }

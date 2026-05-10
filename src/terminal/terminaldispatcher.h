@@ -124,7 +124,8 @@ public:
   void OSC_dispatch( const Parser::OSC_End* act,
                      Framebuffer* fb,
                      const std::string& cached_foreground,
-                     const std::string& cached_background );
+                     const std::string& cached_background,
+                     const std::map<int, std::string>& cached_indexed_colors );
 
   bool operator==( const Dispatcher& x ) const;
 };
