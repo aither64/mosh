@@ -623,52 +623,106 @@ static void OSC_8( const std::string& OSC_string, Framebuffer* fb )
   fb->ds.set_hyperlink( Hyperlink( OSC_string.substr( 2, second_semicolon - 2 ), std::move( url ) ) );
 }
 
-/* xterm uses an Operating System Command to set the window title */
-void Dispatcher::OSC_dispatch( const Parser::OSC_End* act __attribute( ( unused ) ), Framebuffer* fb )
+static bool Parse_OSC_Command( const std::vector<wchar_t>& OSC_string, long& cmd_num, size_t& offset )
 {
-  /* handle osc copy clipboard sequence 52;c; */
-  if ( OSC_string.size() >= 5 && OSC_string[0] == L'5' && OSC_string[1] == L'2' && OSC_string[2] == L';'
-       && OSC_string[3] == L'c' && OSC_string[4] == L';' ) {
-    Terminal::Framebuffer::title_type clipboard( OSC_string.begin() + 5, OSC_string.end() );
-    fb->set_clipboard( clipboard );
-    /* handle osc terminal title sequence */
-  } else if ( OSC_string.size() >= 1 ) {
-    long cmd_num = -1;
-    int offset = 0;
-    if ( OSC_string[0] == L';' ) {
-      /* OSC of the form "\033];<title>\007" */
-      cmd_num = 0; /* treat it as as a zero */
-      offset = 1;
-    } else if ( ( OSC_string.size() >= 2 ) && ( OSC_string[1] == L';' ) ) {
-      /* OSC of the form "\033]X;<title>\007" where X can be:
-       * 0: set icon name and window title
-       * 1: set icon name
-       * 2: set window title */
-      cmd_num = OSC_string[0] - L'0';
-      offset = 2;
-    }
-    if ( cmd_num == 8 ) {
-      // Handle OSC8 hyperlinks separately
-      std::string osc_8_str;
-      if ( !Parse_OSC_8( OSC_string, osc_8_str ) ) {
-        //
-        return;
+  if ( OSC_string.empty() ) {
+    return false;
+  }
+
+  if ( OSC_string[0] == L';' ) {
+    cmd_num = 0;
+    offset = 1;
+    return true;
+  }
+
+  if ( OSC_string[0] < L'0' || OSC_string[0] > L'9' ) {
+    return false;
+  }
+
+  cmd_num = 0;
+  offset = 0;
+  while ( offset < OSC_string.size() ) {
+    const wchar_t c = OSC_string[offset];
+    if ( c >= L'0' && c <= L'9' ) {
+      cmd_num = cmd_num * 10 + ( c - L'0' );
+      if ( cmd_num > 65535 ) {
+        return false;
       }
-      OSC_8( osc_8_str, fb );
+      offset++;
+    } else if ( c == L';' ) {
+      offset++;
+      return true;
+    } else {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+static void append_osc_color_reply( std::string& output, long cmd_num, const std::string& color, bool bel_terminated )
+{
+  char ps_str[8];
+  snprintf( ps_str, sizeof( ps_str ), "%ld", cmd_num );
+  output.append( "\033]" );
+  output.append( ps_str );
+  output.push_back( ';' );
+  output.append( color );
+  output.append( bel_terminated ? "\007" : "\033\\" );
+}
+
+/* xterm uses an Operating System Command to set the window title */
+void Dispatcher::OSC_dispatch( const Parser::OSC_End* act,
+                               Framebuffer* fb,
+                               const std::string& cached_foreground,
+                               const std::string& cached_background )
+{
+  const bool bel_terminated = ( act->char_present && act->ch == 0x07 );
+
+  long cmd_num = -1;
+  size_t offset = 0;
+  if ( !Parse_OSC_Command( OSC_string, cmd_num, offset ) ) {
+    return;
+  }
+
+  if ( cmd_num == 52 && offset + 1 < OSC_string.size() && OSC_string[offset] == L'c'
+       && OSC_string[offset + 1] == L';' ) {
+    Terminal::Framebuffer::title_type clipboard( OSC_string.begin() + offset + 2, OSC_string.end() );
+    fb->set_clipboard( clipboard );
+    return;
+  }
+
+  if ( cmd_num == 8 ) {
+    // Handle OSC8 hyperlinks separately
+    std::string osc_8_str;
+    if ( !Parse_OSC_8( OSC_string, osc_8_str ) ) {
       return;
     }
-    bool set_icon = cmd_num == 0 || cmd_num == 1;
-    bool set_title = cmd_num == 0 || cmd_num == 2;
-    if ( set_icon || set_title ) {
-      fb->set_title_initialized();
-      int title_length = std::min( OSC_string.size(), (size_t)256 );
-      Terminal::Framebuffer::title_type newtitle( OSC_string.begin() + offset, OSC_string.begin() + title_length );
-      if ( set_icon ) {
-        fb->set_icon_name( newtitle );
+    OSC_8( osc_8_str, fb );
+    return;
+  }
+
+  if ( cmd_num == 10 || cmd_num == 11 ) {
+    if ( offset + 1 == OSC_string.size() && OSC_string[offset] == L'?' ) {
+      const std::string& color = ( cmd_num == 10 ) ? cached_foreground : cached_background;
+      if ( !color.empty() ) {
+        append_osc_color_reply( terminal_to_host, cmd_num, color, bel_terminated );
       }
-      if ( set_title ) {
-        fb->set_window_title( newtitle );
-      }
+    }
+    return;
+  }
+
+  bool set_icon = cmd_num == 0 || cmd_num == 1;
+  bool set_title = cmd_num == 0 || cmd_num == 2;
+  if ( set_icon || set_title ) {
+    fb->set_title_initialized();
+    size_t title_length = std::min( OSC_string.size(), offset + (size_t)256 );
+    Terminal::Framebuffer::title_type newtitle( OSC_string.begin() + offset, OSC_string.begin() + title_length );
+    if ( set_icon ) {
+      fb->set_icon_name( newtitle );
+    }
+    if ( set_title ) {
+      fb->set_window_title( newtitle );
     }
   }
 }
